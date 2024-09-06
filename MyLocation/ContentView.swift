@@ -54,14 +54,6 @@ struct ContentView: View {
                 showsUserLocation: true, // マップ上にユーザーの場所を表示するオプションをBool値で指定
                 userTrackingMode: $trackingMode) // マップがユーザーの位置情報更新にどのように応答するかを決定
             .edgesIgnoringSafeArea(.bottom)
-            
-            Button("ユーザ情報を登録する（ブラウザ起動）") {
-                if let url = URL(string: "http://arta.exp.mnb.ees.saitama-u.ac.jp/ana/staff/regist.php?d_id=" + String(manager.id)) {
-                    UIApplication.shared.open(url)
-                }
-            }
-            .padding()
-            
         }
     }
 }

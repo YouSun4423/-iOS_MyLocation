@@ -4,10 +4,13 @@
 //
 //  Created by manabe on 2022/11/11.
 //
-import UIKit
+import CoreLocation
+import CoreBluetooth
 import MapKit
 
-class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
+class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate, CBCentralManagerDelegate {
+    
+    static let shared = LocationManager()
     
     private var myDeviceId: String = UIDevice.current.identifierForVendor!.uuidString
     private var myLatitude: Double = 0
@@ -36,7 +39,11 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
     }
 
     let manager = CLLocationManager()
-    @Published var region = MKCoordinateRegion()
+    var centralManager: CBCentralManager!
+    @Published var region = MKCoordinateRegion(
+        center: CLLocationCoordinate2D(latitude: 0, longitude: 0),
+        span: MKCoordinateSpan(latitudeDelta: 0.05, longitudeDelta: 0.05)
+    )
     
     override init() {
         super.init()
@@ -46,10 +53,9 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
         manager.distanceFilter = kCLDistanceFilterNone // 無制限の距離フィルター
         manager.allowsBackgroundLocationUpdates = true // バックグラウンド更新を許可
         manager.pausesLocationUpdatesAutomatically = false // 自動的に位置情報更新を一時停止しない
-        manager.startUpdatingLocation() // 初期化時に位置情報の取得を開始
         
+        centralManager = CBCentralManager(delegate: self, queue: nil)
         checkAuthorizationStatus()
-        startUpdatingLocationWithTimer()
     }
     
     private func checkAuthorizationStatus() {
@@ -77,56 +83,41 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
             rootViewController.present(alert, animated: true, completion: nil)
         }
     }
-
-    private func startUpdatingLocationWithTimer() {
-        // 1分ごとに位置情報を更新
-        Timer.scheduledTimer(withTimeInterval: 60.0, repeats: true) { _ in
-            self.manager.startUpdatingLocation()
-            // 数秒後に停止してバッテリー消費を抑える
-            DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
-                self.manager.stopUpdatingLocation()
-            }
+    
+    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        let status = manager.authorizationStatus
+        if status == .authorizedAlways || status == .authorizedWhenInUse {
+            manager.startUpdatingLocation()
+        } else {
+            checkAuthorizationStatus()
         }
+    }
+
+    func updateLocation(completion: @escaping (Bool) -> Void) {
+        manager.requestLocation()
+        completion(true)
     }
     
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        locations.last.map {
-            let center = CLLocationCoordinate2D(
-                latitude: $0.coordinate.latitude,
-                longitude: $0.coordinate.longitude)
-            
-            region = MKCoordinateRegion(
-                center: center,
-                latitudinalMeters: 200.0,
-                longitudinalMeters: 200.0
-            )
+        guard let location = locations.last else { return }
+
+        let center = CLLocationCoordinate2D(latitude: location.coordinate.latitude, longitude: location.coordinate.longitude)
+        
+        DispatchQueue.main.async {
+            // 現在のregionのspanを保持したままcenterだけを更新
+            self.region = MKCoordinateRegion(center: center, span: self.region.span)
         }
 
-        let location: CLLocation? = locations.first
-        if let valueLat = location?.coordinate.latitude {
-            self.myLatitude = valueLat
-            print("Updated Latitude: \(valueLat)")
-        }
-        if let valueLon = location?.coordinate.longitude {
-            self.myLongitude = valueLon
-            print("Updated Longitude: \(valueLon)")
-        }
-        if let valueAlt = location?.altitude {
-            self.myAltitude = valueAlt
-            print("Updated Altitude: \(valueAlt)")
-        }
-        if let valueFl = location?.floor?.level {
-            self.myFloor = valueFl
-            print("Updated Floor: \(valueFl)")
-        }
-        
+        myLatitude = location.coordinate.latitude
+        myLongitude = location.coordinate.longitude
+        myAltitude = location.altitude
+        myFloor = location.floor?.level ?? 0
         // 位置情報が有効である場合にのみデータを送信
         if myLatitude != 0 && myLongitude != 0 {
             postData()
         }
     }
     
-
     func postData() {
         let baseUrl: String = "http://arta.exp.mnb.ees.saitama-u.ac.jp/ana/staff/post.php" + "?id=" + self.myDeviceId + "&lat=" + String(self.myLatitude) + "&lon=" + String(self.myLongitude) + "&alt=" + String(self.myAltitude) + "&fl=" + String(self.myFloor)
         
@@ -150,9 +141,29 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
         manager.requestLocation()
     }
 
-
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
-        print("Failed to find user's location: \(error.localizedDescription)")
+        if let clError = error as? CLError, clError.code == .denied {
+            print("Location access denied by the user.")
+            // 必要ならばユーザーに許可を促す処理を追加
+        } else {
+            print("Failed to find user's location: \(error.localizedDescription)")
+        }
+    }
+    
+    // MARK: - CBCentralManagerDelegate methods
+    
+    func centralManagerDidUpdateState(_ central: CBCentralManager) {
+        if central.state == .poweredOn {
+            centralManager.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: NSNumber(value: true)])
+        } else {
+            print("Bluetooth is not available.")
+        }
+    }
+    
+    func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String: Any], rssi RSSI: NSNumber) {
+        if let name = peripheral.name {
+            print("Discovered \(name) with MAC address \(peripheral.identifier.uuidString) and RSSI \(RSSI)")
+            // MACアドレス (peripheral.identifier.uuidString) と電波強度 (RSSI) を処理
+        }
     }
 }
- 
